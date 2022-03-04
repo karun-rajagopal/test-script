@@ -1,77 +1,94 @@
-user =  User.where(login: "karun.rajagopal@coupa.com").first
-User.current_user = user
-record = 'requisition_headers'
-data_table = 'requisition_header'
-controller =  RequisitionHeadersController
+require 'faraday'
+require 'json'
 
-adv_search_condition = { "col_key" => "created_by", "created_by_op" => "contains_keywords", "created_by" => "#{user.firstname}", "created_by_id" => "#{user.id}", "del" => "" }
-params = generate_params adv_search_condition
+def rebuild_index(model)
+  @index_present_prior =  model.__elasticsearch__.index_exists?
+  index = model.rebuild_index!
+  @index_name = index[:index_name] unless index.nil?
+end
 
-
-search_data_table controller,data_table,params
+def remove_index(model)
+  model.delete_elasticsearch_index(@index_name) unless @index_present_prior
+end
 
 def generate_params(condition = nil, filter = "0")
   params = {
-    "utf8" => "✓",
-    "search_mode" => "basic",
-    "filter" => filter,
-    "cond_op" => "all",
-    "group_op" => "any",
-    "basic_search_mode" => "restricted",
-    "key" => "RequisitionHeadersController:requisition_header"
+    utf8: '✓',
+    search_mode: 'basic',
+    filter: filter,
+    cond_op: 'all',
+    group_op: 'any',
+    basic_search_mode: 'restricted',
+    key: 'RequisitionHeadersController:requisition_header',
+    as_json: true
   }
   unless condition.nil?
-   params['conditions'] = {"#{SecureRandom.random_number(100000)}" => condition }
-   params['search_mode'] = 'advanced'
+    params['conditions'] = {"#{SecureRandom.random_number(100000)}" => condition }
+    params['search_mode'] = 'advanced'
   end
 
   params
 end
 
-def search_data_table controller,data_table,params
-  post "/#{controller}/search_#{data_table}_table", params: params, xhr: true
+
+def search_with_elastic_search(data_table, failover = true)
+  failover_status = Setup.es_disable_failover?
+  Setup.assign(:es_requisition_headers_requisition_header, true)
+  Setup.assign(:es_disable_failover, true) unless failover
+  ids = fetch_record_ids data_table
+  Setup.assign(:es_disable_failover, failover_status)
+  ids
 end
 
-def post(path, params = nil, headers = {})
-  header_options = headers.empty? ? json_headers : headers
-  Coupa::Service.request(:post, build_url(hostname, path, control_url_details), header_options, params)
+def search_with_db(data_table)
+  Setup.assign(:es_requisition_headers_requisition_header, false)
+  fetch_record_ids data_table
 end
 
-def control_url
-  @control_url ||= URI.parse(SimpleConfig.for(:application).control_url)
+def fetch_record_ids data_table
+  url = "/requisition_headers/search_#{data_table}_table"
+  params = generate_params
+  @app.post(url, params: params, xhr: true)
+  results = JSON.parse(@app.response.body)['rows']
+  results.map {|result| result['id_num']}
+  # matches = @app.response.body.match(/\$.+##{data_table}_tbody.+.append.+(<tr.+)\);/)
+  # rows = Nokogiri::HTML(matches[0].gsub(/\\+/, "")).css('tr.coupa_datatable_row')
+  # rows.map do  |row|
+  #   /[0-9]+/.match(row.css('td')[0].css('a').first.to_s).to_s
+  # end
 end
 
-def json_headers
-  {
-    'Content-Type' => 'application/json',
-    'Accept' => 'application/json'
-  }
-end
-
-def hostname
-  control_url.host
-end
-
-def control_url_details
-  {
-    scheme: control_url.scheme,
-    port: control_url.port
-  }
-end
-
-def build_url(hostname, path, options = {})
-  uri_options = {
-    host: hostname,
-    path: (path.start_with?('/') ? path : "/#{path}")
-  }
-  uri_options[:query] = options[:params].to_query if options[:params].present?
-  uri_options[:port]  = options[:port] if options[:port].present?
-  uri_class = options[:scheme] == 'http' ? URI::HTTP : URI::HTTPS
-  uri_class.build(uri_options)
+ApplicationController.class_eval do
+  def set_current_user
+    User.current_user = User.first
+    User.current_user
+  end
 end
 
 
-# SET GLOBAL sql_mode=‘STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION'
-#
-#
-# | ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION |
+def override_protect_from_forgery
+  override_method2 = <<-EOF
+          protect_from_forgery unless: -> { User.current_user == User.first }
+  EOF
+  ApplicationController.instance_eval(override_method2)
+end
+
+@app = ActionDispatch::Integration::Session.new Rails.application
+@app.host = "www.example.com"
+
+override_protect_from_forgery
+data_table = 'requisition_header'
+rebuild_index RequisitionHeader
+es_records =  search_with_elastic_search data_table, false
+db_records = search_with_db data_table
+
+puts "es_records = #{es_records}"
+puts "db_records = #{db_records}"
+
+if es_records == db_records
+  puts "TEST PASSED"
+else
+  puts "TEST FAILED"
+end
+
+remove_index RequisitionHeader
