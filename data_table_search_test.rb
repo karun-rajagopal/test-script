@@ -1,11 +1,10 @@
-require 'faraday'
 require 'json'
 require 'nokogiri'
 require 'open-uri'
 
 def rebuild_index(model)
   @index_present_prior =  model.__elasticsearch__.index_exists?
-  index = model.rebuild_index!
+  index = model.rebuild_index! unless @index_present_prior
   @index_name = index[:index_name] unless index.nil?
 end
 
@@ -52,11 +51,6 @@ def fetch_record_ids data_table
   @app.post(url, params: params, xhr: true)
   results = JSON.parse(@app.response.body)['rows']
   results.map {|result| result['id_num']}
-  # matches = @app.response.body.match(/\$.+##{data_table}_tbody.+.append.+(<tr.+)\);/)
-  # rows = Nokogiri::HTML(matches[0].gsub(/\\+/, "")).css('tr.coupa_datatable_row')
-  # rows.map do  |row|
-  #   /[0-9]+/.match(row.css('td')[0].css('a').first.to_s).to_s
-  # end
 end
 
 def item_search(search_term, use_db = false)
@@ -119,15 +113,8 @@ end
 remove_index RequisitionHeader
 
 
-# @records = seed_data
-
-expected_search_results = [1 ,2]
-
-puts "expected ids #{expected_search_results}"
-
-def home_page_item_search expected_search_results
-  item_ids = item_search 'coupa'
-  # db_results = item_search 'coupa', true
+def home_page_item_search search_term, expected_search_results
+  item_ids = item_search search_term
   puts "item_ids #{item_ids}"
   test_passed = true
 
@@ -137,59 +124,10 @@ def home_page_item_search expected_search_results
   test_passed
 end
 
-result  = home_page_item_search(expected_search_results) ? "Home page search PASSED" : "home page search FAILED"
+result  = home_page_item_search('item', [1948, 1951, 1952, 1953]) ? "Home page search PASSED" : "home page search FAILED"
 
 puts result
 
-# DatabaseCleaner.clean_with(:truncation)
-# DatabaseCleaner.clean
 
 rebuild_index Item
 rebuild_index Supplier
-
-# puts "SupplierItem count after script:  #{SupplierItem.count}"
-#
-#
-
-
-
-
-
-# require 'factory_girl'
-# require 'factory_girl_rails'
-# require 'database_cleaner'
-
-# Dir[Rails.root.join 'engines/suppliers/spec/factories/**.rb'].each { |file| require file }
-#
-# DatabaseCleaner.strategy = :transaction
-#
-# DatabaseCleaner.start # usually this is called in setup of a test
-#
-# puts "SupplierItem count before script: #{SupplierItem.count}"
-
-#
-# def create_supplier_item (item_name, supplier_name = nil)
-#   supplier = supplier_name.nil? ? FactoryGirl.create(:supplier) : FactoryGirl.create(:supplier, name: supplier_name, number: supplier_name)
-#   item = FactoryGirl.create(:item, name: item_name)
-#   FactoryGirl.create(:supplier_item, supplier: supplier , item: item)
-# end
-#
-# def seed_data
-#   rebuild_index Item
-#   [
-#     create_supplier_item('coupa test item', "supplier1_#{Time.now.to_i}"),
-#     create_supplier_item('dev coupa item', "supplier2_#{Time.now.to_i}"),
-#     create_supplier_item('random item', "supplier3_#{Time.now.to_i}"),
-#   ]
-# end
-
-# def rebuild_index(model = 'all')
-#   if model == 'all'
-#     Search::Searchable::INDEXED_MODELS.each do |record|
-#     klass = record.constantize
-#     klass.rebuild_index! unless klass.index_exists?
-#     end
-#   else
-#     model.constantize.rebuild_index! unless model.index_exists?
-#   end
-# end
